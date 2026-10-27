@@ -1,0 +1,700 @@
+// This is your Prisma schema file.
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USERS & WORKSPACES
+// ============================================
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  emailVerified     DateTime?
+  name              String?
+  avatarUrl         String?
+  passwordHash      String?
+  role              GlobalRole @default(USER)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lastLoginAt       DateTime?
+
+  memberships       WorkspaceMembership[]
+  accounts          Account[]
+  sessions          Session[]
+  ownedWorkspaces   Workspace[]          @relation("WorkspaceOwner")
+  assignedLeads     Lead[]               @relation("LeadOwner")
+  leadActivities    LeadActivity[]
+  auditLogs         AuditLog[]
+
+  @@index([email])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  ownerId     String
+  plan        PlanTier @default(STARTER)
+  logoUrl     String?
+  website     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner               User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  memberships         WorkspaceMembership[]
+  searchJobs          SearchJob[]
+  businesses          Business[]
+  leads               Lead[]
+  campaigns           Campaign[]
+  proposals           Proposal[]
+  clientProjects      ClientProject[]
+  subscription        Subscription?
+  usageEvents         UsageEvent[]
+  integrationConfigs  IntegrationConfig[]
+  auditLogs           AuditLog[]
+
+  @@index([slug])
+  @@index([ownerId])
+}
+
+model WorkspaceMembership {
+  id          String          @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole   @default(MEMBER)
+  invitedAt   DateTime        @default(now())
+  acceptedAt  DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+// ============================================
+// BUSINESS DISCOVERY
+// ============================================
+
+model SearchJob {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  category        String
+  location        String
+  latitude        Float?
+  longitude       Float?
+  radiusMeters    Int             @default(5000)
+  websiteFilter   WebsiteFilter   @default(ALL)
+  serviceFilter   ServiceType?
+  provider        DiscoveryProvider @default(GOOGLE_PLACES)
+  status          JobStatus       @default(PENDING)
+  totalFound      Int             @default(0)
+  processedCount  Int             @default(0)
+  errorMessage    String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  businesses  Business[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, createdAt])
+}
+
+model Business {
+  id                  String               @id @default(cuid())
+  workspaceId         String
+  searchJobId         String?
+  externalId          String?              // Provider's place_id or similar
+  provider            DiscoveryProvider    @default(GOOGLE_PLACES)
+  name                String
+  category            String
+  address             String?
+  city                String?
+  state               String?
+  country             String?
+  latitude            Float?
+  longitude           Float?
+  phone               String?
+  candidateWebsite    String?              // From provider, NOT verified
+  websiteStatus       WebsiteStatus        @default(UNCHECKED)
+  verifiedWebsiteUrl  String?
+  websiteCheckedAt    DateTime?
+  googleMapsUrl       String?
+  googlePlaceId       String?
+  rating              Float?
+  reviewCount         Int?
+  businessHours       Json?
+  verificationStatus  VerificationStatus   @default(UNVERIFIED)
+  isDuplicate         Boolean              @default(false)
+  duplicateOfId       String?
+  notes               String?              @db.Text
+  discoveredAt        DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  workspace    Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  searchJob    SearchJob?      @relation(fields: [searchJobId], references: [id], onDelete: SetNull)
+  contacts     BusinessContact[]
+  audits       WebsiteAudit[]
+  lead         Lead?
+
+  @@unique([workspaceId, externalId, provider])
+  @@index([workspaceId, websiteStatus])
+  @@index([workspaceId, category])
+  @@index([workspaceId, city])
+  @@index([workspaceId, discoveredAt])
+}
+
+model BusinessContact {
+  id                  String           @id @default(cuid())
+  businessId          String
+  type                ContactType
+  value               String
+  label               String?
+  isPrimary           Boolean          @default(false)
+  sourceProvider      String?
+  providerAttributed  Boolean          @default(false)
+  verifiedAt          DateTime?
+  consentEvidence     String?          @db.Text
+  retentionUntil      DateTime?
+  createdAt           DateTime         @default(now())
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
+
+// ============================================
+// WEBSITE AUDIT
+// ============================================
+
+model WebsiteAudit {
+  id                    String            @id @default(cuid())
+  businessId            String
+  triggeredBy           String?           // userId
+  url                   String
+  httpStatus            Int?
+  httpsEnabled          Boolean           @default(false)
+  isAccessible          Boolean           @default(false)
+  performanceScore      Int?              // 0-100
+  seoScore              Int?              // 0-100
+  accessibilityScore    Int?              // 0-100
+  mobileUsabilityScore  Int?              // 0-100
+  hasContactForm        Boolean           @default(false)
+  hasOnlineBooking      Boolean           @default(false)
+  hasEcommerce          Boolean           @default(false)
+  hasSocialLinks        Boolean           @default(false)
+  pageSpeedData         Json?
+  auditFindings         Json?             // Array of { type, severity, message, evidence }
+  opportunityScore      Int?              // 0-100 derived
+  scoreBreakdown        Json?             // Breakdown of scoring signals
+  confidenceLevel       Float             @default(0)   // 0-1
+  status                AuditStatus       @default(PENDING)
+  errorMessage          String?
+  auditedAt             DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@index([status])
+}
+
+// ============================================
+// LEAD CRM
+// ============================================
+
+model Lead {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  businessId      String          @unique
+  ownerId         String?
+  status          LeadStatus      @default(NEW)
+  tags            String[]        @default([])
+  serviceInterest ServiceType?
+  estimatedValue  Float?
+  notes           String?         @db.Text
+  lastContactedAt DateTime?
+  nextFollowUpAt  DateTime?
+  lostReason      String?
+  wonAt           DateTime?
+  lostAt          DateTime?
+  doNotContact    Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  workspace    Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  business     Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  owner        User?          @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  activities   LeadActivity[]
+  outreach     OutreachMessage[]
+  proposals    Proposal[]
+  project      ClientProject?
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, ownerId])
+  @@index([workspaceId, updatedAt])
+}
+
+model LeadActivity {
+  id          String           @id @default(cuid())
+  leadId      String
+  userId      String?
+  type        LeadActivityType
+  title       String
+  description String?          @db.Text
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+
+  lead Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([leadId, createdAt])
+}
+
+// ============================================
+// CAMPAIGNS & OUTREACH
+// ============================================
+
+model Campaign {
+  id          String         @id @default(cuid())
+  workspaceId String
+  name        String
+  type        CampaignType
+  status      CampaignStatus @default(DRAFT)
+  description String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages  OutreachMessage[]
+
+  @@index([workspaceId, status])
+}
+
+model OutreachMessage {
+  id              String          @id @default(cuid())
+  campaignId      String?
+  leadId          String
+  channel         OutreachChannel
+  recipientHandle String          // email or phone
+  subject         String?
+  body            String          @db.Text
+  status          MessageStatus   @default(DRAFT)
+  approvedBy      String?
+  approvedAt      DateTime?
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  repliedAt       DateTime?
+  providerMsgId   String?
+  errorMessage    String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  campaign Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([campaignId, status])
+}
+
+model ConsentRecord {
+  id              String   @id @default(cuid())
+  businessId      String
+  contactHandle   String
+  consentType     String
+  consentedAt     DateTime
+  expiresAt       DateTime?
+  evidence        String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model SuppressionRecord {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  contactHandle String
+  channel       OutreachChannel
+  reason        String
+  createdAt     DateTime @default(now())
+
+  @@unique([workspaceId, contactHandle, channel])
+  @@index([workspaceId, contactHandle])
+}
+
+// ============================================
+// PROPOSALS
+// ============================================
+
+model Proposal {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  leadId          String
+  title           String
+  serviceType     ServiceType
+  status          ProposalStatus  @default(DRAFT)
+  clientName      String
+  clientBusiness  String
+  problemStatement String?        @db.Text
+  solution        String?         @db.Text
+  features        Json?           // Array of { title, description, included }
+  timeline        String?
+  priceMin        Float?
+  priceMax        Float?
+  currency        String          @default("USD")
+  assumptions     String?         @db.Text
+  exclusions      String?         @db.Text
+  maintenancePlan Json?
+  nextSteps       String?         @db.Text
+  validUntil      DateTime?
+  generatedByAI   Boolean         @default(false)
+  humanReviewed   Boolean         @default(false)
+  pdfUrl          String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([leadId])
+}
+
+// ============================================
+// CLIENT PROJECTS
+// ============================================
+
+model ClientProject {
+  id              String          @id @default(cuid())
+  leadId          String          @unique
+  workspaceId     String
+  name            String
+  status          ProjectStatus   @default(ACTIVE)
+  serviceType     ServiceType
+  requirements    String?         @db.Text
+  budgetEstimate  Float?
+  budgetActual    Float?
+  currency        String          @default("USD")
+  startDate       DateTime?
+  deliveryDate    DateTime?
+  deliveredAt     DateTime?
+  milestones      Json?           // Array of { title, dueDate, completed }
+  assignedTo      String[]        @default([])  // userIds
+  invoiceRef      String?
+  notes           String?         @db.Text
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+}
+
+// ============================================
+// BILLING
+// ============================================
+
+model Subscription {
+  id                  String             @id @default(cuid())
+  workspaceId         String             @unique
+  plan                PlanTier
+  status              SubscriptionStatus @default(TRIALING)
+  trialEndsAt         DateTime?
+  currentPeriodStart  DateTime?
+  currentPeriodEnd    DateTime?
+  canceledAt          DateTime?
+  providerSubId       String?
+  providerCustomerId  String?
+  seats               Int                @default(1)
+  discoveryQuota      Int                @default(500)
+  auditQuota          Int                @default(100)
+  proposalQuota       Int                @default(50)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
+
+model UsageEvent {
+  id          String    @id @default(cuid())
+  workspaceId String
+  type        UsageType
+  quantity    Int       @default(1)
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, type, createdAt])
+}
+
+// ============================================
+// INTEGRATIONS & ADMIN
+// ============================================
+
+model IntegrationConfig {
+  id          String   @id @default(cuid())
+  workspaceId String
+  provider    String
+  enabled     Boolean  @default(false)
+  configJson  Json?    // Non-sensitive config (quota limits, settings)
+  lastTestedAt DateTime?
+  status      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, provider])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  workspaceId String?
+  userId      String?
+  action      String
+  resource    String?
+  resourceId  String?
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@index([action])
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum GlobalRole {
+  USER
+  ADMIN
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum PlanTier {
+  STARTER
+  PROFESSIONAL
+  AGENCY
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  PAUSED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum WebsiteStatus {
+  UNCHECKED
+  VERIFIED
+  NO_WEBSITE
+  CHECK_FAILED
+  MANUAL_REVIEW
+}
+
+enum WebsiteFilter {
+  ALL
+  NO_WEBSITE
+  HAS_WEBSITE
+  POOR_WEBSITE
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  DISPUTED
+}
+
+enum AuditStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  CONTACTED
+  REPLIED
+  MEETING
+  PROPOSAL
+  WON
+  LOST
+  DO_NOT_CONTACT
+}
+
+enum LeadActivityType {
+  STATUS_CHANGE
+  NOTE_ADDED
+  TASK_CREATED
+  TASK_COMPLETED
+  EMAIL_SENT
+  WHATSAPP_SENT
+  REPLY_RECEIVED
+  MEETING_SCHEDULED
+  PROPOSAL_CREATED
+  PROPOSAL_SENT
+  PROJECT_STARTED
+}
+
+enum OutreachChannel {
+  EMAIL
+  WHATSAPP
+}
+
+enum MessageStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  SENDING
+  SENT
+  DELIVERED
+  REPLIED
+  FAILED
+  OPTED_OUT
+}
+
+enum CampaignType {
+  EMAIL
+  WHATSAPP
+  MIXED
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum ServiceType {
+  BUSINESS_WEBSITE
+  ECOMMERCE
+  MOBILE_APP
+  BOOKING_SYSTEM
+  MAINTENANCE
+  CUSTOM_SOFTWARE
+  SEO_SERVICES
+  SOCIAL_MEDIA
+}
+
+enum ContactType {
+  EMAIL
+  PHONE
+  WHATSAPP
+  WEBSITE
+  SOCIAL_FACEBOOK
+  SOCIAL_INSTAGRAM
+  SOCIAL_LINKEDIN
+}
+
+enum ProposalStatus {
+  DRAFT
+  REVIEWED
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ON_HOLD
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+enum DiscoveryProvider {
+  GOOGLE_PLACES
+  MOCK
+}
+
+enum UsageType {
+  DISCOVERY
+  AUDIT
+  PROPOSAL
+  OUTREACH_EMAIL
+  OUTREACH_WHATSAPP
+}
